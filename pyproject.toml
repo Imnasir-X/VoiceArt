@@ -1,0 +1,19 @@
+[project]
+name = "voiceart"
+version = "2.0.0"
+description = "Real-time audio visualiser: microphone input drives bubbles, waves, fractals and an equaliser over an animated solar-system backdrop."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Nasir Khan" }]
+requires-python = ">=3.9,<3.13"
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
