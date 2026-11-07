@@ -1,13 +1,12 @@
-import pygame
-import sys
-import time
-import numpy as np
-from audio_capture import AudioCapture
-from audio_analysis import AudioAnalysis
-from visualizer import Visualizer
 import logging
+import time
 
-logging.basicConfig(level=logging.INFO)
+import pygame
+
+from audio_analysis import AudioAnalysis
+from audio_capture import AudioCapture
+from visualizer import Visualizer
+
 
 class VoiceArt:
     def __init__(self):
@@ -25,6 +24,7 @@ class VoiceArt:
         self.running = True
         self.show_debug = False
         self.paused = False
+        self.font = pygame.font.SysFont("monospace", 16)
         print("Starting Voice Art 2.0...")
         print("Calibrating audio - please make some noise...")
         self.analysis.calibrate(3)
@@ -81,15 +81,15 @@ class VoiceArt:
             self.fps_history.pop(0)
         avg_fps = sum(self.fps_history) / len(self.fps_history)
 
-        font = pygame.font.SysFont("monospace", 16)
+        font = self.font
         debug_texts = [
             f"FPS: {avg_fps:.1f}",
             f"Volume: {self.analysis.get_volume():.2f}/{self.analysis.max_volume:.2f}",
             f"Particles: {self.visualizer.particle_count}",
-            f"Press 'F' for fullscreen",
-            f"Press 'D' to hide debug",
-            f"Press 'SPACE' to pause",
-            f"Press 'ESC' to exit"
+            "Press 'F' for fullscreen",
+            "Press 'D' to hide debug",
+            "Press 'SPACE' to pause",
+            "Press 'ESC' to exit",
         ]
         y = 10
         for text in debug_texts:
@@ -108,6 +108,11 @@ class VoiceArt:
             self.audio.close()
             pygame.quit()
 
-if __name__ == "__main__":
+def main():
+    logging.basicConfig(level=logging.INFO)
     app = VoiceArt()
     app.run()
+
+
+if __name__ == "__main__":
+    main()

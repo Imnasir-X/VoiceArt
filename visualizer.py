@@ -1,10 +1,18 @@
-import pygame
+import logging
 import math
 import random
-import numpy as np
-import logging
 
-logging.basicConfig(level=logging.INFO)
+import numpy as np
+import pygame
+
+logger = logging.getLogger(__name__)
+
+# Upper bound on live bubbles so loud input cannot stall the frame loop.
+MAX_PARTICLES = 400
+# Bubble sprites are cached per (size, hue bucket) instead of being redrawn
+# ring by ring for every particle on every frame.
+HUE_BUCKET_DEGREES = 6
+MAX_CACHED_SPRITES = 2048
 
 class Visualizer:
     def __init__(self, width, height):
@@ -18,6 +26,7 @@ class Visualizer:
         self.time = 0
         self.particle_count = 0
         self.particles = []
+        self._sprite_cache = {}
         self.base_hue = random.uniform(0, 360)
         self.palette = self._generate_palette()
         self.waves = [
@@ -62,15 +71,34 @@ class Visualizer:
         p = v * (1 - s)
         q = v * (1 - s * f)
         t = v * (1 - s * (1 - f))
-        if i == 0: r, g, b = v, t, p
-        elif i == 1: r, g, b = q, v, p
-        elif i == 2: r, g, b = p, v, t
-        elif i == 3: r, g, b = p, q, v
-        elif i == 4: r, g, b = t, p, v
-        else: r, g, b = v, p, q
+        if i == 0:
+            r, g, b = v, t, p
+        elif i == 1:
+            r, g, b = q, v, p
+        elif i == 2:
+            r, g, b = p, v, t
+        elif i == 3:
+            r, g, b = p, q, v
+        elif i == 4:
+            r, g, b = t, p, v
+        else:
+            r, g, b = v, p, q
         return (int(r * 255), int(g * 255), int(b * 255))
 
     def create_bubble_surface(self, size, hue):
+        size = max(1, int(size))
+        bucket = int(hue % 360) // HUE_BUCKET_DEGREES
+        key = (size, bucket)
+        cached = self._sprite_cache.get(key)
+        if cached is not None:
+            return cached
+        if len(self._sprite_cache) >= MAX_CACHED_SPRITES:
+            self._sprite_cache.clear()
+        surf = self._draw_bubble(size, bucket * HUE_BUCKET_DEGREES)
+        self._sprite_cache[key] = surf
+        return surf
+
+    def _draw_bubble(self, size, hue):
         surf = pygame.Surface((size * 2, size * 2), pygame.SRCALPHA)
         for radius in range(size, 0, -1):
             alpha = int(255 * (radius / size) * 0.9)
@@ -102,22 +130,21 @@ class Visualizer:
             dominant = max(low_freq, mid_freq, high_freq)
 
             pattern = 'spiral' if dominant == low_freq else 'radial' if dominant == mid_freq else 'wave'
-            bubble_count = int(volume * 10)
-            
-            for _ in range(bubble_count):
+            bubble_count = min(int(volume * 10), max(0, MAX_PARTICLES - len(self.particles)))
+
+            for n in range(bubble_count):
                 hue = (self.base_hue + random.uniform(0, 360)) % 360
                 size = int(10 + volume * 15 + dominant * 10)
                 bubble_surf = self.create_bubble_surface(size, hue)
                 spawn_x = self.width // 2
                 spawn_y = self.height * 0.4
-                
+
                 if pattern == 'spiral':  # Low freq: tight spiral
-                    angle = self.time * 0.1 + _ * (2 * math.pi / bubble_count)
-                    radius = volume * 50
+                    angle = self.time * 0.1 + n * (2 * math.pi / bubble_count)
                     vel_x = math.cos(angle) * 2
                     vel_y = math.sin(angle) * 2
                 elif pattern == 'radial':  # Mid freq: starburst
-                    angle = _ * (2 * math.pi / bubble_count)
+                    angle = n * (2 * math.pi / bubble_count)
                     speed = 2 + volume * 3
                     vel_x = math.cos(angle) * speed
                     vel_y = math.sin(angle) * speed
@@ -145,7 +172,7 @@ class Visualizer:
         for p in self.particles[:]:
             freq_amplitude = freq_data[p['freq_idx']] if freq_data.any() else 0.5
             wave_factor = math.sin(self.time * 0.03 + p['wave_phase']) * freq_amplitude * 1.5
-            
+
             if p['pattern'] == 'spiral':
                 p['pos'][0] += p['vel'][0] + wave_factor * 0.5
                 p['pos'][1] += p['vel'][1] + wave_factor * 0.5
@@ -155,24 +182,24 @@ class Visualizer:
             else:  # wave
                 p['pos'][0] += p['vel'][0] + wave_factor
                 p['pos'][1] += p['vel'][1] + wave_factor * 0.5
-            
+
             p['pos'][1] = min(p['pos'][1], self.height * 0.8)  # Keep above equalizer
-            
+
             p['size'] = p['base_size'] * (1 + freq_amplitude * 0.3 * math.sin(self.time * 0.08 + p['wave_phase']))
             p['hue'] = (p['hue'] + 3 + freq_amplitude * 5) % 360
             p['surface'] = self.create_bubble_surface(int(p['size']), p['hue'])
-            
+
             p['trail'].append((int(p['pos'][0]), int(p['pos'][1])))
             if len(p['trail']) > 3:
                 p['trail'].pop(0)
             for i, pos in enumerate(p['trail']):
                 alpha = int(255 * (i + 1) / len(p['trail']) * (p['life'] / 90) * 0.4)
                 pygame.draw.circle(self.particle_layer, (*self._hsv_to_rgb(p['hue'], 1.0, 0.7), alpha), pos, int(p['size'] * 0.3))
-            
+
             if p['life'] > 0:
                 surf_size = p['surface'].get_width()
-                self.particle_layer.blit(p['surface'], 
-                                        (int(p['pos'][0] - surf_size // 2), 
+                self.particle_layer.blit(p['surface'],
+                                        (int(p['pos'][0] - surf_size // 2),
                                          int(p['pos'][1] - surf_size // 2)))
                 p['life'] -= 1
             else:
@@ -243,8 +270,8 @@ class Visualizer:
             pulse = math.sin(self.time * 0.1 + i) * amplitude * 10
             x_pos = i * bar_spacing + bar_width // 2
             y_pos = self.height - height - pulse
-            self.equalizer_layer.blit(bloom, 
-                                    (int(x_pos - bloom_size), 
+            self.equalizer_layer.blit(bloom,
+                                    (int(x_pos - bloom_size),
                                      int(y_pos - bloom_size // 2)))
 
     def update(self, volume, freq_data):
@@ -290,8 +317,8 @@ class Visualizer:
             surface.blit(self.fractal_layer, (0, 0))
             surface.blit(self.equalizer_layer, (0, 0))
             surface.blit(self.particle_layer, (0, 0))
-        except Exception as e:
-            logging.error(f"Error rendering: {e}")
+        except (pygame.error, ValueError, TypeError) as e:
+            logger.error("Error rendering: %s", e)
 
     def quit(self):
         pass

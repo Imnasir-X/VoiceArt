@@ -1,9 +1,15 @@
-import numpy as np
-import time
-import math
 import logging
+import math
+import time
 
-logging.basicConfig(level=logging.INFO)
+import numpy as np
+
+logger = logging.getLogger(__name__)
+
+# Lower bounds that keep the normalisation maths away from zero when the
+# calibration window is completely silent (muted mic, no input device).
+MIN_NOISE_FLOOR = 50.0
+MIN_DYNAMIC_SPAN = 500.0
 
 class AudioAnalysis:
     def __init__(self, chunk=1024, rate=44100):
@@ -25,13 +31,16 @@ class AudioAnalysis:
         try:
             audio_array = np.frombuffer(in_data, dtype=np.int16)
             self.audio_data = audio_array
-            rms = np.sqrt(np.mean(np.square(audio_array)))
+            if audio_array.size == 0:
+                return
+            # Square in float64: squaring int16 samples overflows and wraps.
+            rms = float(np.sqrt(np.mean(np.square(audio_array.astype(np.float64)))))
             self.volume_history.pop(0)
             self.volume_history.append(rms)
             self.volume = sum(self.volume_history) / len(self.volume_history)
 
             # Dynamic range adjustment
-            if self.volume > self.noise_floor:
+            if self.volume > self.noise_floor and self.max_volume > 0:
                 self.dynamic_range = max(0.5, min(2.0, self.volume / self.max_volume))
 
             if len(audio_array) >= self.fft_size:
@@ -52,8 +61,8 @@ class AudioAnalysis:
                 self.band_history = np.roll(self.band_history, 1, axis=1)
                 self.band_history[:, 0] = freq_data
                 self.freq_data = np.mean(self.band_history, axis=1)
-        except Exception as e:
-            logging.error(f"Audio processing error: {e}")
+        except (ValueError, FloatingPointError) as e:
+            logger.error("Audio processing error: %s", e)
 
     def calibrate(self, duration=3, stream=None):
         """Calibrate with tighter noise floor."""
@@ -70,8 +79,10 @@ class AudioAnalysis:
 
         if volumes:
             volumes.sort()
-            self.max_volume = volumes[int(len(volumes) * 0.9)] * 1.5  # Increased range
-            self.noise_floor = volumes[int(len(volumes) * 0.2)] * 1.3  # Higher threshold
+            noise_floor = volumes[int(len(volumes) * 0.2)] * 1.3  # Higher threshold
+            max_volume = volumes[int(len(volumes) * 0.9)] * 1.5  # Increased range
+            self.noise_floor = max(MIN_NOISE_FLOOR, noise_floor)
+            self.max_volume = max(max_volume, self.noise_floor + MIN_DYNAMIC_SPAN)
             print(f"Calibration complete: max_volume={self.max_volume:.2f}, noise_floor={self.noise_floor:.2f}")
         else:
             self.max_volume = 5000
@@ -82,7 +93,8 @@ class AudioAnalysis:
         """Return tighter normalized volume."""
         if self.volume < self.noise_floor * 1.2:  # Stricter noise gate
             return 0
-        normalized = (self.volume - self.noise_floor) / (self.max_volume - self.noise_floor)
+        span = max(self.max_volume - self.noise_floor, 1e-6)
+        normalized = (self.volume - self.noise_floor) / span
         return max(0, min(1, normalized * self.dynamic_range))
 
     def get_frequency_data(self):
